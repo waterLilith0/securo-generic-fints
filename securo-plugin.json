@@ -1,27 +1,55 @@
 {
-  "id": "jschaufuss/securo-ing-fints",
+  "id": "waterlilith0/generic-fints",
   "name": {
-    "en": "ING Germany (FinTS)"
+    "en": "German FinTS"
   },
   "description": {
-    "en": "Read-only ING Germany FinTS bank sync (checking, savings; optional experimental holdings)."
+    "en": "Read-only sync of accounts and transactions from supported German FinTS banks."
   },
   "version": "1.0.0",
-  "repository": "https://github.com/jschaufuss/securo-ing-fints",
+  "repository": "https://github.com/waterlilith0/generic-fints",
   "license": "MIT",
   "min_securo_version": "0.20.0",
-  "workspaces": [
-    "personal"
-  ],
+  "workspaces": ["personal"],
   "runtime": {
-    "entrypoint": "ing_bank:plugin",
+    "entrypoint": "fints_bank:plugin",
     "lockfile": "requirements.txt"
   },
   "network": [
     {
+      "host": "fints2.atruvia.de",
+      "purpose": {
+        "en": "Connect to supported German Atruvia FinTS endpoints."
+      }
+    },
+    {
       "host": "fints.ing.de",
       "purpose": {
-        "en": "Read ING account balances, statements and optional depot positions via FinTS."
+        "en": "Connect to the ING Germany FinTS endpoint."
+      }
+    },
+    {
+      "host": "hbci-pintan.gad.de",
+      "purpose": {
+        "en": "Connect to supported legacy GAD FinTS endpoints."
+      }
+    },
+    {
+      "host": "fints.comdirect.de",
+      "purpose": {
+        "en": "Connect to the comdirect FinTS endpoint."
+      }
+    },
+    {
+      "host": "fints.deutsche-bank.de",
+      "purpose": {
+        "en": "Connect to the Deutsche Bank FinTS endpoint."
+      }
+    },
+    {
+      "host": "banking-dkb.s-fints-pt-dkb.de",
+      "purpose": {
+        "en": "Connect to the DKB FinTS endpoint."
       }
     }
   ],
@@ -30,24 +58,38 @@
       {
         "key": "ing",
         "name": {
-          "en": "ING Germany FinTS"
+          "en": "German FinTS Banks"
         },
         "description": {
-          "en": "Uses your registered FinTS product ID. No payments are initiated."
+          "en": "Choose a supported bank/provider profile and sync its accounts and transactions. No payments are initiated."
         },
         "auth": "credentials",
         "fields": [
           {
+            "key": "bank_profile",
+            "label": {
+              "en": "Bank profile (enter one: atruvia, gls, ing, gad, comdirect, deutsche-bank, dkb)"
+            },
+            "required": false
+          },
+          {
+            "key": "blz",
+            "label": {
+              "en": "Bank code (BLZ; 8 digits; not needed for fixed GLS/ING profiles)"
+            },
+            "required": false
+          },
+          {
             "key": "login",
             "label": {
-              "en": "ING FinTS user ID"
+              "en": "FinTS user ID"
             },
             "secret": true
           },
           {
             "key": "pin",
             "label": {
-              "en": "ING online banking password or PIN"
+              "en": "Online banking password or PIN"
             },
             "secret": true
           },
@@ -66,33 +108,15 @@
             "required": false
           },
           {
-            "key": "balance_mode",
-            "label": {
-              "en": "Balance mode: booked or pending (default: booked)"
-            },
-            "required": false
-          },
-          {
             "key": "history_days",
             "label": {
               "en": "Transaction history days (default 85; max 89)"
             },
             "required": false
-          },
-          {
-            "key": "holdings_enabled",
-            "label": {
-              "en": "Experimental depot fetch (yes/no)"
-            },
-            "required": false
           }
         ],
         "sync_minutes": 360,
-        "provides": [
-          "accounts",
-          "transactions",
-          "holdings"
-        ]
+        "provides": ["accounts", "transactions"]
       }
     ]
   }

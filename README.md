@@ -1,51 +1,57 @@
-# ING Germany (FinTS) for Securo
+# German FinTS Banks for Securo
 
-A read-only bank provider plugin for [Securo](https://github.com/securo-finance/securo). It connects directly to ING Germany using FinTS and imports checking and Extra account balances and transactions, including pending checking-account transactions when ING provides them. It cannot make payments or transfers.
+A read-only bank provider plugin for [Securo](https://github.com/securo-finance/securo). It uses `python-fints` to read accounts, balances, and transactions from a fixed list of German bank/provider profiles. It does not initiate payments or transfers.
 
-**This plugin is AI-generated and was developed with AI assistance.** It is an independent, community project and is not affiliated with, endorsed by, or supported by ING or Securo. It has been tested with one live ING connection and is not yet broadly production-verified.
+**This plugin is AI-generated and was developed with AI assistance.** It is an independent community project and is not affiliated with any bank or Securo. ING has been tested with one live connection; other bank profiles have not been broadly production-verified.
 
-## Before you start
+## Requirements
 
-- Securo **0.20.0 or later**, with plugins enabled and the code plugin runner and egress proxy configured. An administrator must enable these services; see the [Securo bank provider guide](https://github.com/securo-finance/securo/blob/v0.20.0/docs/plugins/bank-provider-plugins.md).
-- An ING Germany online banking login and password or Internet banking PIN.
-- A valid FinTS product ID registered for the software using the [Deutsche Kreditwirtschaft registration process](https://www.fints.org/de/hersteller/produktregistrierung). An ING customer ID, account number, or email address is not a FinTS product ID. No product ID is supplied with this plugin.
-- A successful ING online banking login within the previous 90 days, as required by [ING's FinTS guidance](https://www.ing.de/hilfe/log-in/fints/).
+- Securo **0.20.0 or later**, with the code plugin runner and egress proxy enabled. See the [Securo bank provider guide](https://github.com/securo-finance/securo/blob/v0.20.0/docs/plugins/bank-provider-plugins.md).
+- A German bank account that supports FinTS PIN/TAN, a registered FinTS product ID, online banking user ID, and PIN/password.
+- A supported bank/provider profile and its eight-digit BLZ, if that profile does not provide a default.
 
-## Install in Securo
+## Bank profiles
 
-1. Open your **personal workspace** and go to **Plugins → Catalog**.
-2. Find **ING Germany (FinTS)**, review the requested network access, and install it.
-3. Create an ING connection and enter your login, password or PIN, and registered FinTS product ID.
-4. To select specific accounts, enter their full IBANs in **Account IBANs to sync**, separated by commas. Leave it empty to request all accounts ING reports. If an account does not support balance retrieval, select only the checking and Extra accounts you want to sync.
-5. Start a sync and compare the accounts, balances, and several transactions with ING before relying on the result.
+Enter one of these profile keys in **Bank profile**:
 
-The plugin must first be published to the catalog used by your Securo instance before it appears in the catalog. Availability in the public catalog is not guaranteed.
+| Key | Bank/provider group | BLZ |
+| --- | --- | --- |
+| `atruvia` | Atruvia (Volksbanken/Raiffeisenbanken, Sparda, PSD) | Required |
+| `gls` | GLS Bank (Atruvia endpoint) | Fixed at `43060967` |
+| `ing` | ING Germany | Fixed at `50010517` |
+| `gad` | Legacy GAD endpoint | Required |
+| `comdirect` | comdirect | Required |
+| `deutsche-bank` | Deutsche Bank | Required |
+| `dkb` | DKB | Required |
 
-## Settings
+Securo 0.20's manifest field schema has no select/enum control, so **Bank profile** is a validated text field rather than a dropdown. The plugin maps each accepted profile to a fixed HTTPS endpoint; users cannot enter arbitrary URLs. The corresponding hosts are explicitly declared in `securo-plugin.json`. A listed provider endpoint does not guarantee that every bank or account using it supports the calls this plugin makes; verify the profile and BLZ with your bank.
 
-- **Account IBANs to sync:** Optional, comma-separated complete IBANs. An IBAN not returned by ING stops the sync. The field is stored as a plugin secret.
-- **Balance mode:** `booked` by default. `pending` selects the additional pending balance reported by ING for checking accounts, if present; it does not calculate a balance from individual transactions. ING's terminology and balance timing can differ from its app. Verify both modes against ING before relying on them. Extra accounts use their booked balance.
-- **Transaction history days:** Optional; defaults to 85, accepts 1–89. The sync also respects Securo's requested start date.
-- **Experimental depot fetch:** Set to `yes` to discover ING Direct Depot accounts and read their holdings independently of the selected cash accounts. Off by default.
+## Install and configure
 
-To show pending transactions, enable **Import pending transactions** in Securo's connection settings. The plugin marks the separately returned pending entries as pending; Securo decides whether to import them. Transaction data may change when an entry is booked, so verify that pending entries are matched or cleared and watch for duplicates. Pending amounts may already be reflected in the selected balance; do not subtract them again without checking.
+1. Install the plugin from the catalog used by your Securo instance.
+2. Create a connection for one bank. Enter the profile key, BLZ if required, FinTS user ID, PIN/password, and registered product ID.
+3. Optionally enter one or more complete account IBANs, separated by commas, to select only those accounts. Leave the field empty to sync every eligible account the bank reports.
+4. Start a sync and compare balances and transactions with your bank before relying on the result.
 
-### Known limitation: pending transactions and balances
+Use a separate connection for a different bank. Multiple accounts returned by the same FinTS login are handled by that connection. Account selection is validated against the accounts returned by the bank; a missing selected account stops the sync.
 
-Pending transactions do not always transition to booked in Securo. ING can report a different date or description after booking, and the pending entry may remain alongside the booked entry even after ING stops returning it. Transactions with the same amount can be separate purchases; do not merge them based on amount alone. Disabling **Import pending transactions** prevents importing new pending entries, but may not remove entries already imported.
+For existing ING connections, a blank **Bank profile** continues to use the ING profile and a blank BLZ uses `50010517`. The GLS and ING profiles use their fixed BLZs; supplying a different BLZ for either is rejected.
 
-As a temporary workaround, disable **Import pending transactions** and use balance mode `booked` for a balance consistent with booked transactions. Alternatively, `pending` may show a balance that already reflects pending amounts, but those amounts will not be visible in the transaction list when pending imports are disabled. Actual balance semantics depend on ING's response; compare with ING before relying on either mode.
+## Supported data and settings
 
-**To do:** Investigate whether ING provides a stable, unique reference across pending and booked FinTS records, compare a pending record with its later booked form without collecting credentials or full bank responses, and verify Securo's update behavior. Only implement automatic matching when it is unambiguous, with tests covering repeated amounts, changed dates and descriptions, missing references, and duplicate references. Document any cases requiring manual review. See [issue #1](https://github.com/jschaufuss/securo-ing-fints/issues/1).
+- Accounts and posted transactions from standard `python-fints` calls: account listing, balance retrieval, and transaction retrieval.
+- Account types identified as investment/depot accounts are skipped. Holdings, depot statements, and bank-specific pending balance/transaction extensions are not implemented.
+- **Transaction history days:** Optional; defaults to 85 and accepts 1–89 days. Securo's requested sync start date further limits the window.
+- **Account IBANs to sync:** Optional, comma-separated full IBANs. This field is stored as a plugin secret.
 
-## Limitations and privacy
+The plugin does not complete interactive TAN challenges. A first sync or a later strong customer authentication check may require approval in the bank's app; when FinTS returns a TAN/retry challenge, the sync pauses and needs attention.
 
-- ING supports Direct Depot data via FinTS. Depot discovery and an empty depot response have been tested, but importing live holdings is **experimental and not yet verified with actual positions**. The plugin reads complete MT535 positions and leaves existing holdings unchanged when a depot reports no positions; missing or incomplete data stops the sync rather than deleting assets. Compare imported positions and valuations with ING.
-- ING does not list Rahmenkredit as a supported FinTS account in its current [FinTS FAQ](https://www.ing.de/hilfe/log-in/fints/). This plugin does not implement or verify Rahmenkredit support.
-- Interactive TAN or app approval is not implemented. If ING requires a challenge that cannot be completed by this read-only flow, the connection pauses and needs attention.
-- The bank's FinTS balance can differ from the balance shown in ING's app, including because of pending items. Do not assume either balance mode matches the app in every situation.
-- Avoid syncing the same account simultaneously through multiple providers without reconciling duplicates. Switching providers can create duplicate historical transactions. Do not remove and recreate a plugin connection unnecessarily: its stored ID salt is used to keep transaction IDs stable.
-- Login, password or PIN, selected IBANs, and the plugin's persisted FinTS state are stored as Securo plugin secrets. They are not part of this repository. The plugin connects to `fints.ing.de` through Securo's runner and egress proxy. Never post credentials, full IBANs, or bank responses in issues or logs.
+## Privacy and limitations
+
+- Login, PIN/password, selected IBANs, and serialized FinTS client state are stored as Securo plugin secrets. The plugin does not log bank responses or credentials.
+- Network access is restricted to the exact HTTPS hosts listed in the manifest. Wildcards and IP addresses are not used.
+- FinTS features vary by bank. Unsupported account types or bank-specific behavior may prevent a sync; verify the imported data against the bank.
+- Avoid syncing the same account through multiple providers without reconciling duplicates. Do not remove and recreate a connection unnecessarily: its stored ID salt keeps external account and transaction IDs stable.
 
 ## License
 
