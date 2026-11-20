@@ -137,6 +137,45 @@ class TestPlugin(unittest.TestCase):
         with self.assertRaisesRegex(p.BankSyncError, 'must be 43060967'):
             p._sync({}, context(cfg={'bank_profile': 'gls', 'blz': '43060968'}), factory=Bank)
 
+    def test_gls_profile_syncs_accounts_with_standard_fints_calls(self):
+        observed = {'account_lists': 0, 'balances': [], 'transactions': []}
+
+        class GLSBank(Bank):
+            def get_sepa_accounts(self):
+                observed['account_lists'] += 1
+                entries = super().get_sepa_accounts()
+                observed['listed_accounts'] = [entry.iban for entry in entries]
+                return entries
+
+            def get_balance(self, entry):
+                observed['balances'].append(entry.iban)
+                return super().get_balance(entry)
+
+            def get_transactions(self, entry, **kwargs):
+                observed['transactions'].append((entry.iban, kwargs))
+                return super().get_transactions(entry, **kwargs)
+
+        def factory(**kwargs):
+            observed['client_kwargs'] = kwargs
+            return GLSBank(**kwargs)
+
+        result = p._sync(
+            {}, context(cfg={'bank_profile': 'gls'}), factory=factory, today=TEST_TODAY)
+
+        accounts = result['data']['accounts']
+        self.assertEqual(observed['client_kwargs']['bank_identifier'], '43060967')
+        self.assertEqual(observed['client_kwargs']['server'], 'https://fints2.atruvia.de/fints/')
+        self.assertEqual(observed['account_lists'], 1)
+        self.assertEqual(observed['balances'], observed['listed_accounts'])
+        self.assertEqual(len(observed['transactions']), 2)
+        self.assertTrue(all('include_pending' not in kwargs
+                            for _, kwargs in observed['transactions']))
+        self.assertEqual(len(accounts), 2)
+        self.assertTrue(all(account['institution_name'] == 'GLS Bank' for account in accounts))
+        self.assertTrue(all(account['institution_external_id'] == 'fints-43060967'
+                            for account in accounts))
+        self.assertTrue(all(len(account['transactions']) == 2 for account in accounts))
+
     def test_reject_unknown_profiles_and_missing_group_blz(self):
         with self.assertRaisesRegex(p.BankSyncError, 'Unknown bank profile'):
             p._sync({}, context(cfg={'bank_profile': 'arbitrary'}), factory=Bank)
