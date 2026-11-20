@@ -6,7 +6,7 @@
   "description": {
     "en": "Read-only sync of accounts and transactions from supported German FinTS banks."
   },
-  "version": "1.0.0",
+  "version": "1.0.2",
   "repository": "https://github.com/waterlilith0/securo-generic-fints",
   "license": "MIT",
   "min_securo_version": "0.20.0",
