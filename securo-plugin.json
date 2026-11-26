@@ -17,6 +17,12 @@
   },
   "network": [
     {
+      "host": "fints1.atruvia.de",
+      "purpose": {
+        "en": "Connect to GLS Bank and supported Atruvia FinTS endpoints."
+      }
+    },
+    {
       "host": "fints2.atruvia.de",
       "purpose": {
         "en": "Connect to supported German Atruvia FinTS endpoints."
@@ -47,7 +53,7 @@
       }
     },
     {
-      "host": "banking-dkb.s-fints-pt-dkb.de",
+      "host": "fints.dkb.de",
       "purpose": {
         "en": "Connect to the DKB FinTS endpoint."
       }
@@ -68,7 +74,7 @@
           {
             "key": "bank_profile",
             "label": {
-              "en": "Bank profile (enter one: atruvia, gls, ing, gad, comdirect, deutsche-bank, dkb)"
+              "en": "Bank profile (enter one: atruvia, atruvia-1, gls, ing, gad, comdirect, deutsche-bank, dkb)"
             },
             "required": false
           },
@@ -92,12 +98,6 @@
               "en": "Online banking password or PIN"
             },
             "secret": true
-          },
-          {
-            "key": "product_id",
-            "label": {
-              "en": "Registered FinTS product ID"
-            }
           },
           {
             "key": "account_ibans",

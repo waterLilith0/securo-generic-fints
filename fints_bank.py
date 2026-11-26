@@ -10,21 +10,27 @@ import datetime as dt
 import hashlib
 import hmac
 import secrets as pysecrets
+import time
 from collections import Counter
 from decimal import Decimal, InvalidOperation
 from zoneinfo import ZoneInfo
 
+PRODUCT_ID = 'DCAAD26F9DB177903C2DE1F0A'
 LEGACY_BANK_CODE = '50010517'
 LEGACY_SERVER = 'https://fints.ing.de/fints/'
 DEFAULT_BANK_PROFILE = 'ing'
 BANK_PROFILES = {
     'atruvia': {
-        'label': 'Atruvia group (Volksbanken/Raiffeisenbanken, Sparda, PSD)',
-        'server': 'https://fints2.atruvia.de/fints/',
+        'label': 'Atruvia group (fints2)',
+        'server': 'https://fints2.atruvia.de/cgi-bin/hbciservlet',
+    },
+    'atruvia-1': {
+        'label': 'Atruvia group (fints1)',
+        'server': 'https://fints1.atruvia.de/cgi-bin/hbciservlet',
     },
     'gls': {
         'label': 'GLS Bank',
-        'server': 'https://fints2.atruvia.de/fints/',
+        'server': 'https://fints1.atruvia.de/cgi-bin/hbciservlet',
         'fixed_blz': '43060967',
         'institution_name': 'GLS Bank',
     },
@@ -36,42 +42,42 @@ BANK_PROFILES = {
     },
     'gad': {
         'label': 'Legacy GAD',
-        'server': 'https://hbci-pintan.gad.de/fints/',
+        'server': 'https://hbci-pintan.gad.de/cgi-bin/hbciservlet',
     },
     'comdirect': {
         'label': 'comdirect',
-        'server': 'https://fints.comdirect.de/fints/',
+        'server': 'https://fints.comdirect.de/fints',
         'institution_name': 'comdirect',
     },
     'deutsche-bank': {
         'label': 'Deutsche Bank',
-        'server': 'https://fints.deutsche-bank.de/fints/',
+        'server': 'https://fints.deutsche-bank.de/',
         'institution_name': 'Deutsche Bank',
     },
     'dkb': {
         'label': 'DKB',
-        'server': 'https://banking-dkb.s-fints-pt-dkb.de/fints/',
+        'server': 'https://fints.dkb.de/fints',
         'institution_name': 'DKB',
     },
 }
 ALLOWED_FINTS_HOSTS = frozenset({
+    'fints1.atruvia.de',
     'fints2.atruvia.de',
     'fints.ing.de',
     'hbci-pintan.gad.de',
     'fints.comdirect.de',
     'fints.deutsche-bank.de',
-    'banking-dkb.s-fints-pt-dkb.de',
+    'fints.dkb.de',
 })
 CONTRACT = 1
 MAX_TX = 20_000
+TAN_WAIT_SECONDS = 35
+TAN_POLL_INTERVAL = 5
+TAN_MAX_POLLS = 6
 
 
 class NeedsAuth(Exception):
     """Securo should pause polling until credentials / approval are refreshed."""
-
-
-class RateLimited(Exception):
-    """Securo should retry on its next scheduled interval."""
 
 
 class BankSyncError(Exception):
@@ -177,12 +183,54 @@ def _get_bank_info(bank) -> dict:
             for a in value.get('accounts', []) if isinstance(a, dict) and a.get('iban')}
 
 
-def _require_result(value, *, stage: str):
-    # Do not save a pending challenge as a successful sync; never initiate payments.
+def _require_result(bank, value, *, stage: str, deadline: float):
+    from fints.client import NeedTANResponse
+
+    def reject_failed_approval(_segment, response):
+        if response.code.startswith('9'):
+            raise NeedsAuth('The bank rejected app approval; no data was imported')
+
+    if isinstance(value, NeedTANResponse):
+        if not value.decoupled:
+            raise NeedsAuth('The bank requires a TAN entry; this plugin only supports app approval')
+        mechanism = bank.get_tan_mechanisms().get(bank.get_current_tan_mechanism())
+        if getattr(mechanism, 'automated_polling_allowed', None) is False:
+            raise NeedsAuth('The bank does not allow automatic approval polling')
+        max_polls = getattr(mechanism, 'decoupled_max_poll_number', None)
+        if max_polls is None:
+            max_polls = TAN_MAX_POLLS
+        if not isinstance(max_polls, int) or max_polls < 1:
+            raise BankSyncError('Invalid bank approval polling limit; nothing was imported')
+        max_polls = min(max_polls, TAN_MAX_POLLS)
+        first_wait = getattr(mechanism, 'wait_before_first_poll', None)
+        next_wait = getattr(mechanism, 'wait_before_next_poll', None)
+        for wait in (first_wait, next_wait):
+            if wait is not None and (not isinstance(wait, int) or wait < 0):
+                raise BankSyncError('Invalid bank approval polling interval; nothing was imported')
+        first_wait = max(TAN_POLL_INTERVAL, first_wait or 0)
+        next_wait = max(TAN_POLL_INTERVAL, next_wait or 0)
+        for poll in range(max_polls):
+            wait = first_wait if poll == 0 else next_wait
+            if time.monotonic() + wait >= deadline:
+                break
+            time.sleep(wait)
+            if time.monotonic() >= deadline:
+                break
+            bank.add_response_callback(reject_failed_approval)
+            try:
+                value = bank.send_tan(value, '')
+            finally:
+                bank.remove_response_callback(reject_failed_approval)
+            if not isinstance(value, NeedTANResponse):
+                break
+            if not value.decoupled:
+                raise NeedsAuth('The bank requires a TAN entry; this plugin only supports app approval')
+        if isinstance(value, NeedTANResponse):
+            raise NeedsAuth('App approval was not completed in time; start a new sync and approve the prompt promptly')
     if value is None:
         raise BankSyncError(f'FinTS bank returned no {stage}; nothing was imported')
-    if value.__class__.__name__ in ('NeedTANResponse', 'NeedRetryResponse'):
-        raise NeedsAuth('The bank requires app approval; automated FinTS sync is paused')
+    if value.__class__.__name__ == 'NeedRetryResponse':
+        raise NeedsAuth('The bank requires an unsupported FinTS verification step')
     return value
 
 
@@ -191,7 +239,7 @@ def _settings(params, context):
     secret = context.secrets or {}
     login = _text(secret.get('login'))
     pin = str(secret.get('pin') or '')
-    product_id = _text(config.get('product_id'))
+    product_id = PRODUCT_ID.strip()
     bank_profile = str(config.get('bank_profile') or DEFAULT_BANK_PROFILE).strip().casefold()
     profile = BANK_PROFILES.get(bank_profile)
     if profile is None:
@@ -203,8 +251,10 @@ def _settings(params, context):
         raise BankSyncError(f'BLZ for {profile["label"]} must be {fixed_blz}')
     bank_identifier = entered_blz or fixed_blz or ''
     server = profile['server']
-    if not login or not pin or not product_id:
-        raise NeedsAuth('FinTS user ID, PIN and registered product ID are required')
+    if not login or not pin:
+        raise NeedsAuth('FinTS user ID and PIN are required')
+    if not product_id:
+        raise BankSyncError('Plugin product ID is not configured; set PRODUCT_ID in fints_bank.py')
     if not bank_identifier:
         raise BankSyncError(f'BLZ is required for {profile["label"]}')
     if not bank_identifier.isascii() or not bank_identifier.isdigit() or len(bank_identifier) != 8:
@@ -228,6 +278,7 @@ def _settings(params, context):
 
 
 def _sync(params, context, *, factory=None, today=None) -> dict:
+    tan_deadline = time.monotonic() + TAN_WAIT_SECONDS
     login, pin, product_id, bank_profile, profile, bank_identifier, server, days, salt = _settings(params, context)
     config = context.config or {}
     saved_secrets = context.secrets or {}
@@ -264,8 +315,9 @@ def _sync(params, context, *, factory=None, today=None) -> dict:
         with client:
             bank = client
             if isinstance(getattr(bank, 'init_tan_response', None), NeedTANResponse):
-                raise NeedsAuth('The bank requires app approval to start the FinTS session')
-            listed = _require_result(bank.get_sepa_accounts(), stage='account list')
+                _require_result(bank, bank.init_tan_response, stage='dialog initialization', deadline=tan_deadline)
+                bank.init_tan_response = None
+            listed = _require_result(bank, bank.get_sepa_accounts(), stage='account list', deadline=tan_deadline)
             if not listed:
                 raise BankSyncError('FinTS bank returned no SEPA accounts; existing accounts are unchanged')
             selection = str(saved_secrets.get('account_ibans') or '').strip()
@@ -291,9 +343,10 @@ def _sync(params, context, *, factory=None, today=None) -> dict:
                 currency = _text(metadata.get(iban, {}).get('currency') or 'EUR', 3).upper()
                 if len(currency) != 3 or not currency.isalpha():
                     raise BankSyncError('Unexpected account currency; nothing was imported')
-                balance_obj = _require_result(bank.get_balance(acc), stage='account balance')
+                balance_obj = _require_result(bank, bank.get_balance(acc), stage='account balance', deadline=tan_deadline)
                 bal = _money(getattr(balance_obj, 'amount', balance_obj))
-                tx_objs = _require_result(bank.get_transactions(acc, start_date=start, end_date=today), stage='transactions')
+                tx_objs = _require_result(bank, bank.get_transactions(acc, start_date=start, end_date=today),
+                                          stage='transactions', deadline=tan_deadline)
                 rows = _transaction_rows(tx_objs, salt, acc_id)
                 accounts.append({
                     'external_id': acc_id,
@@ -327,7 +380,7 @@ def _sync(params, context, *, factory=None, today=None) -> dict:
             raise NeedsAuth('The bank requires strong customer authentication (9075); this plugin cannot complete an interactive approval') from None
         if cls in ('FinTSConnectionError', 'FinTSNoResponseError', 'TimeoutError',
                    'ConnectTimeout', 'ReadTimeout', 'ConnectionError'):
-            raise RateLimited('FinTS connection is temporarily unavailable') from None
+            raise BankSyncError(f'FinTS connection failed ({cls}); no data was imported') from None
         tb = exc.__traceback__
         while tb and tb.tb_next:
             tb = tb.tb_next
